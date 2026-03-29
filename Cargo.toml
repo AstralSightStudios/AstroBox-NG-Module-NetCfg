@@ -1,0 +1,14 @@
+[package]
+name = "netcfg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+hickory-resolver = { version = "0.25.2", features = ["https-ring", "webpki-roots"] }
+log = "0.4"
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+sysproxy = "0.3.0"
+tokio = { version = "1", features = ["rt", "net"] }
+url = "2.5.7"
