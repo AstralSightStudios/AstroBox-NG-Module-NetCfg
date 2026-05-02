@@ -2,8 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use hickory_resolver::{
     TokioResolver,
     config::{LookupIpStrategy, NameServerConfig, ResolverConfig},
-    name_server::TokioConnectionProvider,
-    proto::xfer::Protocol,
+    net::runtime::TokioRuntimeProvider,
 };
 use reqwest::{
     Client, ClientBuilder, NoProxy, Proxy,
@@ -13,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::{LazyLock, RwLock},
+    sync::{Arc, LazyLock, RwLock},
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use sysproxy::Sysproxy;
@@ -68,11 +67,11 @@ impl DohDnsResolver {
         let endpoint = config.endpoint_url()?;
         let resolver_config = build_resolver_config(&endpoint)?;
         let mut builder =
-            TokioResolver::builder_with_config(resolver_config, TokioConnectionProvider::default());
+            TokioResolver::builder_with_config(resolver_config, TokioRuntimeProvider::default());
         builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
 
         Ok(Self {
-            resolver: builder.build(),
+            resolver: builder.build()?,
         })
     }
 }
@@ -82,7 +81,8 @@ impl Resolve for DohDnsResolver {
         let resolver = self.resolver.clone();
         Box::pin(async move {
             let lookup = resolver.lookup_ip(name.as_str()).await?;
-            let addrs: Addrs = Box::new(lookup.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+            let addrs: Vec<_> = lookup.iter().map(|ip| SocketAddr::new(ip, 0)).collect();
+            let addrs: Addrs = Box::new(addrs.into_iter());
             Ok(addrs)
         })
     }
@@ -191,7 +191,7 @@ fn build_client_builder_for_config(config: &DohConfig) -> ClientBuilder {
     }
 
     match DohDnsResolver::new(config) {
-        Ok(resolver) => builder.dns_resolver2(resolver),
+        Ok(resolver) => builder.dns_resolver(resolver),
         Err(err) => {
             log::warn!(
                 "[netcfg] failed to construct DoH resolver, fallback to system DNS: {:?}",
@@ -211,11 +211,16 @@ fn build_resolver_config(endpoint: &Url) -> Result<ResolverConfig> {
     let endpoint_path = build_http_endpoint(endpoint);
     let ips = resolve_provider_ips(&host, port)?;
 
-    let mut config = ResolverConfig::new();
+    let mut config = ResolverConfig::default();
     for ip in ips {
-        let mut name_server = NameServerConfig::new(SocketAddr::new(ip, port), Protocol::Https);
-        name_server.tls_dns_name = Some(host.clone());
-        name_server.http_endpoint = Some(endpoint_path.clone());
+        let mut name_server = NameServerConfig::https(
+            ip,
+            Arc::<str>::from(host.clone()),
+            Some(Arc::<str>::from(endpoint_path.clone())),
+        );
+        for connection in &mut name_server.connections {
+            connection.port = port;
+        }
         name_server.trust_negative_responses = true;
         config.add_name_server(name_server);
     }
