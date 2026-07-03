@@ -278,7 +278,11 @@ fn build_client_for_config(config: &DohConfig, github_doh: bool) -> Client {
 }
 
 fn build_client_builder_for_config(config: &DohConfig, github_doh: bool) -> ClientBuilder {
-    let mut builder = Client::builder();
+    // 不设总超时（大文件下载可能持续很久），但连接和读停滞必须有上限，
+    // 否则被墙/劫持的连接会让请求无限挂起。
+    let mut builder = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(60));
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
